@@ -314,9 +314,15 @@ pub fn robot(p: &Painter, c: Pos2, s: f32, mood: Mood, t: f32, accent: Color32, 
     let my = head.center().y + s * 0.3;
     let st = Stroke::new(1.3_f32, fg);
     match mood {
-        Mood::Thirsty => p.circle_stroke(pos2(c.x, my), s * 0.1, st),
-        Mood::Happy => p.line_segment([pos2(c.x - s * 0.16, my), pos2(c.x + s * 0.16, my)], st),
-        _ => p.line_segment([pos2(c.x - s * 0.1, my), pos2(c.x + s * 0.1, my)], st),
+        Mood::Thirsty => {
+            p.circle_stroke(pos2(c.x, my), s * 0.1, st);
+        }
+        Mood::Happy => {
+            p.line_segment([pos2(c.x - s * 0.16, my), pos2(c.x + s * 0.16, my)], st);
+        }
+        _ => {
+            p.line_segment([pos2(c.x - s * 0.1, my), pos2(c.x + s * 0.1, my)], st);
+        }
     }
     if mood == Mood::Thirsty {
         // tetes air di samping kepala

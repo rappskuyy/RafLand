@@ -40,4 +40,3 @@ dari nol (kode, teks, dan desain robot orisinal, tidak menyalin ReyLand).
 - Kirim ke HP tanpa QR (tautan ditampilkan sebagai teks); Windows akan meminta izin firewall
 - Deteksi rapat di browser hanya bila tab rapat sedang aktif
 - Kode belum pernah dikompilasi di sini; kemungkinan ada error kecil saat `cargo build` pertama
-"# RafLand" 

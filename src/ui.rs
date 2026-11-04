@@ -191,7 +191,9 @@ impl App {
                     Some(tex) => {
                         p.image(tex.id(), cr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                     }
-                    None => p.rect_filled(cr, 6.0, th.track),
+                    None => {
+                        p.rect_filled(cr, 6.0, th.track);
+                    }
                 }
                 let line = match self.lyric_index(now) {
                     Some(i) => self.lyrics[i].1.as_str(),
