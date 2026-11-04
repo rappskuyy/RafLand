@@ -1,0 +1,47 @@
+name: Build RafLand
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc installer\rafland.iss
+
+      - name: Upload exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: rafland-exe
+          path: target/release/rafland.exe
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: rafland-installer
+          path: dist/RafLand-Setup.exe
+
+      - name: Publish release (tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/RafLand-Setup.exe
+            target/release/rafland.exe
