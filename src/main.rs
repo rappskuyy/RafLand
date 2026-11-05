@@ -308,18 +308,6 @@ impl App {
         let hotkey_shared = Arc::new(Mutex::new(if cfg.hotkey_on { cfg.hotkey.clone() } else { String::new() }));
         sys::spawn_hotkey(tx.clone(), ctx.clone(), hotkey_shared.clone());
 
-        // Baca kecerahan awal di thread terpisah (PowerShell lambat).
-        {
-            let tx2 = tx.clone();
-            let ctx2 = ctx.clone();
-            std::thread::spawn(move || {
-                if let Some(v) = sys::get_brightness() {
-                    let _ = tx2.send(Msg::Brightness(v));
-                    ctx2.request_repaint();
-                }
-            });
-        }
-
         let today = sys::local_dt();
         if data.water_ymd != today.ymd() {
             data.water_ymd = today.ymd();
@@ -871,12 +859,7 @@ impl App {
                 self.media_at = now;
                 media::control("seek", Some(ms));
             }
-            Action::BrightnessValue(v) => {
-                if v != self.brightness_percent {
-                    self.brightness_percent = v;
-                    sys::set_brightness(v);
-                }
-            }
+            Action::BrightnessValue(_) => {}
             Action::VolumeValue(v) => {
                 self.vol_sync_at = now;
                 if v != self.volume_percent {

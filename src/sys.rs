@@ -3,14 +3,13 @@
 
 use crate::Msg;
 use eframe::egui;
-use std::os::windows::process::CommandExt;
-use std::process::Command;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use windows::core::PCWSTR;
 use windows::Win32::{
-    Foundation::{BOOL, HWND, LPARAM, POINT},
+    Foundation::{BOOL, HMODULE, HWND, LPARAM, POINT},
     Media::Audio::{
         eCapture, eConsole, eRender, EDataFlow, Endpoints::IAudioEndpointVolume, IMMDeviceEnumerator,
         MMDeviceEnumerator,
@@ -18,18 +17,21 @@ use windows::Win32::{
     System::{
         Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED},
         Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS},
+        Registry::{RegDeleteKeyValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ},
         SystemInformation::GetLocalTime,
     },
     UI::{
-        Input::KeyboardAndMouse::{keybd_event, GetAsyncKeyState, KEYEVENTF_KEYUP},
+        Shell::ShellExecuteW,
+        Input::KeyboardAndMouse::{
+            keybd_event, RegisterHotKey, UnregisterHotKey, KEYEVENTF_KEYUP, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
+        },
         WindowsAndMessaging::{
-            EnumWindows, GetCursorPos, GetSystemMetrics, GetWindowTextW, IsWindowVisible, SM_CXSCREEN,
+            EnumWindows, GetCursorPos, GetSystemMetrics, GetWindowTextW, IsWindowVisible, MessageBeep, PeekMessageW, MB_ICONEXCLAMATION,
+            MSG, PM_REMOVE, SM_CXSCREEN, SW_SHOWNORMAL, WM_HOTKEY,
         },
     },
 };
 
-/// CREATE_NO_WINDOW: cegah jendela console muncul.
-const NO_WINDOW: u32 = 0x0800_0000;
 
 // ---------------- waktu, baterai, kursor ----------------
 
@@ -95,13 +97,12 @@ pub fn screen_width_px() -> f32 {
 
 // ---------------- menjalankan proses / membuka sesuatu ----------------
 
-fn spawn_hidden(program: &str, args: &[&str]) {
-    let _ = Command::new(program).args(args).creation_flags(NO_WINDOW).spawn();
-}
-
-/// Buka URI / file / folder lewat shell Windows.
+/// Buka URI / file / folder lewat shell Windows (ShellExecute).
 pub fn open_uri(target: &str) {
-    spawn_hidden("cmd", &["/C", "start", "", target]);
+    let w = wide(target);
+    unsafe {
+        let _ = ShellExecuteW(HWND::default(), PCWSTR(wide("open").as_ptr()), PCWSTR(w.as_ptr()), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL);
+    }
 }
 
 /// Buka overlay tangkap layar bawaan Windows (Snipping Tool).
@@ -141,80 +142,44 @@ pub fn screenshot_window() {
     }
 }
 
-/// Mulai bersama Windows (HKCU\...\Run).
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Mulai bersama Windows (HKCU\...\Run) lewat API registry.
 pub fn set_autostart(on: bool) {
-    let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-    if on {
-        if let Ok(exe) = std::env::current_exe() {
-            let val = format!("\"{}\"", exe.display());
-            spawn_hidden("reg", &["add", key, "/v", "RafLand", "/t", "REG_SZ", "/d", &val, "/f"]);
+    let sub = wide(r"Software\Microsoft\Windows\CurrentVersion\Run");
+    let name = wide("RafLand");
+    unsafe {
+        if on {
+            if let Ok(exe) = std::env::current_exe() {
+                let val = wide(&format!("\"{}\"", exe.display()));
+                let _ = RegSetKeyValueW(
+                    HKEY_CURRENT_USER,
+                    PCWSTR(sub.as_ptr()),
+                    PCWSTR(name.as_ptr()),
+                    REG_SZ.0,
+                    Some(val.as_ptr() as *const std::ffi::c_void),
+                    (val.len() * 2) as u32,
+                );
+            }
+        } else {
+            let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, PCWSTR(sub.as_ptr()), PCWSTR(name.as_ptr()));
         }
-    } else {
-        spawn_hidden("reg", &["delete", key, "/v", "RafLand", "/f"]);
     }
 }
 
 /// Mainkan adzan: pakai %APPDATA%\RafLand\adzan.wav bila ada, kalau tidak bunyi sistem.
 pub fn play_adzan() {
     let wav = crate::store::dir().join("adzan.wav");
-    let script = if wav.exists() {
-        let p = wav.display().to_string().replace('\'', "''");
-        format!("(New-Object Media.SoundPlayer '{}').PlaySync()", p)
-    } else {
-        "[System.Media.SystemSounds]::Exclamation.Play(); Start-Sleep -Seconds 2".to_string()
-    };
-    thread::spawn(move || {
-        let _ = Command::new("powershell")
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
-            .creation_flags(NO_WINDOW)
-            .status();
-    });
-}
-
-// ---------------- kecerahan ----------------
-
-fn run_brightness(percent: u8) {
-    let script = format!(
-        "$b=Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods -ErrorAction SilentlyContinue; if ($b) {{ $b | ForEach-Object {{ Invoke-CimMethod -InputObject $_ -MethodName WmiSetBrightness -Arguments @{{Timeout=1; Brightness={}}} | Out-Null }} }}",
-        percent
-    );
-    let _ = Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
-        .creation_flags(NO_WINDOW)
-        .status();
-}
-
-/// Kirim nilai ke worker thread; bila menumpuk hanya nilai terbaru yang dijalankan.
-pub fn set_brightness(percent: u8) {
-    use std::sync::{mpsc, OnceLock};
-    static TX: OnceLock<mpsc::Sender<u8>> = OnceLock::new();
-    let tx = TX.get_or_init(|| {
-        let (tx, rx) = mpsc::channel::<u8>();
-        thread::spawn(move || {
-            while let Ok(mut v) = rx.recv() {
-                while let Ok(n) = rx.try_recv() {
-                    v = n;
-                }
-                run_brightness(v);
-            }
-        });
-        tx
-    });
-    let _ = tx.send(percent.min(100));
-}
-
-/// Baca kecerahan saat ini (blocking, panggil dari thread terpisah).
-pub fn get_brightness() -> Option<u8> {
-    let out = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness -ErrorAction SilentlyContinue | Select-Object -First 1).CurrentBrightness",
-        ])
-        .creation_flags(NO_WINDOW)
-        .output()
-        .ok()?;
-    String::from_utf8_lossy(&out.stdout).trim().parse::<u8>().ok()
+    unsafe {
+        if wav.exists() {
+            let w = wide(&wav.display().to_string());
+            let _ = PlaySoundW(PCWSTR(w.as_ptr()), HMODULE::default(), SND_FILENAME | SND_ASYNC);
+        } else {
+            let _ = MessageBeep(MB_ICONEXCLAMATION);
+        }
+    }
 }
 
 // ---------------- volume & mic (Core Audio) ----------------
@@ -360,32 +325,49 @@ pub fn parse_combo(s: &str) -> Option<Combo> {
     }
 }
 
-fn down(vk: i32) -> bool {
-    unsafe { (GetAsyncKeyState(vk) as u16 & 0x8000) != 0 }
-}
-
 pub fn spawn_hotkey(tx: Sender<Msg>, ctx: egui::Context, combo: Arc<Mutex<String>>) {
     thread::spawn(move || {
-        let mut was = false;
+        let mut registered = String::from("\u{0}");
+        let mut active = false;
         loop {
-            thread::sleep(Duration::from_millis(30));
             let text = combo.lock().map(|g| g.clone()).unwrap_or_default();
-            let Some(c) = parse_combo(&text) else {
-                was = false;
-                continue;
-            };
-            let pressed = down(c.vk)
-                && down(0x11) == c.ctrl
-                && down(0x10) == c.shift
-                && down(0x12) == c.alt
-                && (down(0x5B) || down(0x5C)) == c.win;
-            if pressed && !was {
-                if tx.send(Msg::Hotkey).is_err() {
-                    return;
+            if text != registered {
+                unsafe {
+                    if active {
+                        let _ = UnregisterHotKey(HWND::default(), 1);
+                        active = false;
+                    }
+                    if let Some(c) = parse_combo(&text) {
+                        let mut m = MOD_NOREPEAT;
+                        if c.ctrl {
+                            m |= MOD_CONTROL;
+                        }
+                        if c.shift {
+                            m |= MOD_SHIFT;
+                        }
+                        if c.alt {
+                            m |= MOD_ALT;
+                        }
+                        if c.win {
+                            m |= MOD_WIN;
+                        }
+                        active = RegisterHotKey(HWND::default(), 1, m, c.vk as u32).is_ok();
+                    }
                 }
-                ctx.request_repaint();
+                registered = text;
             }
-            was = pressed;
+            unsafe {
+                let mut msg = MSG::default();
+                while PeekMessageW(&mut msg, HWND::default(), WM_HOTKEY, WM_HOTKEY, PM_REMOVE).as_bool() {
+                    if msg.message == WM_HOTKEY {
+                        if tx.send(Msg::Hotkey).is_err() {
+                            return;
+                        }
+                        ctx.request_repaint();
+                    }
+                }
+            }
+            thread::sleep(Duration::from_millis(60));
         }
     });
 }
