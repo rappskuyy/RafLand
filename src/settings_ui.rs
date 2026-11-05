@@ -429,7 +429,7 @@ impl App {
 
         let query = self.search.trim().to_lowercase();
         let mut edits: Vec<(u8, Rect)> = Vec::new();
-        let mut content_h = 0.0_f32;
+        let content_h: f32;
 
         // halaman yang ditampilkan (hasil pencarian atau kategori terpilih)
         let page: (String, String, Vec<Block>) = if query.is_empty() {

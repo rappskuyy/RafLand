@@ -12,7 +12,7 @@ use windows::Win32::{
     Foundation::{BOOL, HMODULE, HWND, LPARAM, POINT},
     Media::Audio::{
         eCapture, eConsole, eRender, EDataFlow, Endpoints::IAudioEndpointVolume, IMMDeviceEnumerator,
-        MMDeviceEnumerator,
+        MMDeviceEnumerator, PlaySoundW, SND_ALIAS, SND_ASYNC, SND_FILENAME,
     },
     System::{
         Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED},
@@ -26,8 +26,7 @@ use windows::Win32::{
             keybd_event, RegisterHotKey, UnregisterHotKey, KEYEVENTF_KEYUP, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
         },
         WindowsAndMessaging::{
-            EnumWindows, GetCursorPos, GetSystemMetrics, GetWindowTextW, IsWindowVisible, MessageBeep, PeekMessageW, MB_ICONEXCLAMATION,
-            MSG, PM_REMOVE, SM_CXSCREEN, SW_SHOWNORMAL, WM_HOTKEY,
+            EnumWindows, GetCursorPos, GetSystemMetrics, GetWindowTextW, IsWindowVisible, PeekMessageW, MSG, PM_REMOVE, SM_CXSCREEN, SW_SHOWNORMAL, WM_HOTKEY,
         },
     },
 };
@@ -177,7 +176,8 @@ pub fn play_adzan() {
             let w = wide(&wav.display().to_string());
             let _ = PlaySoundW(PCWSTR(w.as_ptr()), HMODULE::default(), SND_FILENAME | SND_ASYNC);
         } else {
-            let _ = MessageBeep(MB_ICONEXCLAMATION);
+            let alias = wide("SystemExclamation");
+            let _ = PlaySoundW(PCWSTR(alias.as_ptr()), HMODULE::default(), SND_ALIAS | SND_ASYNC);
         }
     }
 }
