@@ -30,7 +30,7 @@ dari nol (kode, teks, dan desain robot orisinal, tidak menyalin ReyLand).
 - Tangkap layar (pintasan bisa diganti, bawaan Ctrl+Shift+S) dan rekam layar (Win+Alt+R, Game Bar)
 - Hari ini: kalender bulanan + acara/tugas per tanggal dengan notifikasi
 - Sholat: grafik lengkung dengan penanda waktu sekarang dan lima kartu waktu
-- Pengaturan dengan kotak cari (Ctrl+F)
+- Jendela Pengaturan terpisah (ikon gigi di bar island): sidebar 9 kategori + kotak cari (Ctrl+F). Hanya berisi opsi yang benar-benar berfungsi
 
 ## Belum ada / batasan
 - Slider kecerahan dihapus dari tampilan baru (kode kontrolnya masih ada)

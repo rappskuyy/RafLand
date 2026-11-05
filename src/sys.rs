@@ -287,10 +287,10 @@ fn window_titles() -> Vec<String> {
 
 /// Heuristik berdasarkan judul jendela. Telepon WhatsApp tidak dihitung rapat.
 /// Rapat di browser hanya terdeteksi saat tab rapatnya yang aktif.
-fn in_meeting() -> bool {
+fn in_meeting(ignore: &[String]) -> bool {
     window_titles().iter().any(|t| {
         let l = t.to_lowercase();
-        if l.contains("whatsapp") {
+        if l.contains("whatsapp") || ignore.iter().any(|k| l.contains(k.as_str())) {
             return false;
         }
         l.contains("zoom meeting")
@@ -300,12 +300,13 @@ fn in_meeting() -> bool {
     })
 }
 
-pub fn spawn_meeting_watcher(tx: Sender<Msg>, ctx: egui::Context) {
+pub fn spawn_meeting_watcher(tx: Sender<Msg>, ctx: egui::Context, ignore: Arc<Mutex<Vec<String>>>) {
     thread::spawn(move || {
         let mut last = false;
         loop {
             thread::sleep(Duration::from_secs(3));
-            let now = in_meeting();
+            let list = ignore.lock().map(|g| g.clone()).unwrap_or_default();
+            let now = in_meeting(&list);
             if now != last {
                 last = now;
                 if tx.send(Msg::Meeting(now)).is_err() {

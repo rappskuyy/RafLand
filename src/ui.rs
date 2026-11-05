@@ -49,7 +49,7 @@ impl App {
         if self.lyrics.is_empty() {
             return None;
         }
-        let pos = self.position_ms(now) + 200;
+        let pos = self.position_ms(now) + 200 + self.cfg.lyric_offset_ms as i64;
         let i = self.lyrics.partition_point(|l| l.0 <= pos);
         if i == 0 { None } else { Some(i - 1) }
     }
@@ -169,7 +169,9 @@ impl App {
             Mode::Alert => {
                 if let Some(a) = &self.alert {
                     let mood = if a.kind == AlertKind::Water { Mood::Thirsty } else { Mood::Alert };
-                    draw::robot(p, pos2(rect.min.x + 30.0, cy + 2.0), 14.0, mood, t, th.accent, th.fg);
+                    if self.cfg.robot_on {
+                        draw::robot(p, pos2(rect.min.x + 30.0, cy + 2.0), 14.0, mood, t, th.accent, th.fg);
+                    }
                     let tx = rect.min.x + 62.0;
                     let maxw = rect.width() - 62.0 - 46.0;
                     text_ellipsis(p, pos2(tx, cy - 18.0), &a.text, 13.0, true, th.fg, maxw);
@@ -204,7 +206,9 @@ impl App {
             }
             _ => {
                 let mood = if self.media.playing { Mood::Happy } else { Mood::Normal };
-                draw::robot(p, pos2(rect.min.x + 26.0, cy + 1.0), 11.0, mood, t, th.accent, th.fg);
+                if self.cfg.robot_on {
+                    draw::robot(p, pos2(rect.min.x + 26.0, cy + 1.0), 11.0, mood, t, th.accent, th.fg);
+                }
                 let dt = sys::local_dt();
                 text(p, pos2(rect.min.x + 52.0, cy), Align2::LEFT_CENTER, &format!("{:02}:{:02}", dt.h, dt.mi), 14.0, true, th.fg);
                 if self.meeting && self.cfg.meeting_auto && self.cfg.mic_button {
@@ -298,7 +302,7 @@ impl App {
         // pengaturan
         let gc = pos2(bar.max.x - 22.0, bar.center().y);
         let gr = g.click("gear", Rect::from_center_size(gc, vec2(30.0, 30.0)));
-        let gactive = self.tab == Tab::Settings;
+        let gactive = false;
         if gactive {
             p.circle_filled(gc, 15.0, th.accent);
         } else if gr.hovered() {
@@ -306,7 +310,7 @@ impl App {
         }
         draw::nav_icon(p, 8, gc, 14.0, if gactive { Color32::WHITE } else { th.muted });
         if gr.clicked() {
-            acts.push(Action::Tab(Tab::Settings));
+            acts.push(Action::OpenSettings);
         }
 
         match self.tab {
@@ -581,6 +585,7 @@ impl App {
         text(p, pos2(left, top + 10.0), Align2::LEFT_CENTER, &self.cfg.city, 15.0, true, th.fg);
         let wtxt = match &self.weather {
             Some((t, d)) => format!("{:.0}°C  {}", t, d),
+            None if !self.cfg.weather_on => "Cuaca dimatikan".to_string(),
             None => "Memuat cuaca...".to_string(),
         };
         text(p, pos2(left, top + 30.0), Align2::LEFT_CENTER, &wtxt, 11.0, false, th.muted);

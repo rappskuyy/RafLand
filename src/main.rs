@@ -7,6 +7,7 @@ mod anim;
 mod draw;
 mod media;
 mod prayer;
+mod settings_ui;
 mod share;
 mod store;
 mod sys;
@@ -141,6 +142,15 @@ pub enum SetId {
     WaterGoal,
     WaterStart,
     WaterEnd,
+    Weather,
+    Clip,
+    Robot,
+    LyricOff,
+    HotkeyOn,
+    HotkeyReset,
+    ThemeDark,
+    ThemeLight,
+    CityStep,
 }
 
 #[derive(Clone)]
@@ -177,6 +187,15 @@ pub enum Action {
     CalSel(u32),
     CapFull,
     CapWindow,
+    OpenSettings,
+    SetCat(settings_ui::Cat),
+    SetF(SetId, f32),
+    IgnoreAdd,
+    IgnoreDel(usize),
+    TestAdzan,
+    OpenDataDir,
+    OpenShots,
+    OpenCaps,
     ShelfRemove(usize),
     ShelfOpen(usize),
     ShareToggle,
@@ -264,6 +283,12 @@ pub struct App {
     pub capturing_hotkey: bool,
     pub hotkey_shared: Arc<Mutex<String>>,
     pub focus_search: bool,
+    pub settings_open: bool,
+    pub set_cat: settings_ui::Cat,
+    pub set_scroll_px: f32,
+    pub set_content_h: f32,
+    pub ignore_input: String,
+    pub ignore_shared: Arc<Mutex<Vec<String>>>,
     pub last_slow: Instant,
 }
 
@@ -277,9 +302,10 @@ impl App {
         let now = Instant::now();
 
         media::spawn_poller(tx.clone(), ctx.clone());
-        sys::spawn_meeting_watcher(tx.clone(), ctx.clone());
+        let ignore_shared = Arc::new(Mutex::new(cfg.ignore_titles.clone()));
+        sys::spawn_meeting_watcher(tx.clone(), ctx.clone(), ignore_shared.clone());
         sys::spawn_clipboard(tx.clone(), ctx.clone());
-        let hotkey_shared = Arc::new(Mutex::new(cfg.hotkey.clone()));
+        let hotkey_shared = Arc::new(Mutex::new(if cfg.hotkey_on { cfg.hotkey.clone() } else { String::new() }));
         sys::spawn_hotkey(tx.clone(), ctx.clone(), hotkey_shared.clone());
 
         // Baca kecerahan awal di thread terpisah (PowerShell lambat).
@@ -374,6 +400,12 @@ impl App {
             capturing_hotkey: false,
             hotkey_shared,
             focus_search: false,
+            settings_open: false,
+            set_cat: settings_ui::Cat::Umum,
+            set_scroll_px: 0.0,
+            set_content_h: 0.0,
+            ignore_input: String::new(),
+            ignore_shared,
             last_slow: now.checked_sub(Duration::from_secs(5)).unwrap_or(now),
             cfg,
             data,
@@ -572,7 +604,7 @@ impl App {
         }
         // cuaca (disegarkan tiap 2 jam)
         let wkey = format!("{}|{}|{}|{}", self.cfg.region, self.cfg.city, ymd, dt.h / 2);
-        if self.weather_key != wkey && self.weather_fetch_key != wkey && now >= self.weather_retry_at {
+        if self.cfg.weather_on && self.weather_key != wkey && self.weather_fetch_key != wkey && now >= self.weather_retry_at {
             self.weather_fetch_key = wkey.clone();
             prayer::fetch_weather(self.tx.clone(), self.ctx.clone(), wkey, self.cfg.region.clone(), self.cfg.city.clone());
         }
@@ -712,6 +744,9 @@ impl App {
                 }
                 Msg::Meeting(m) => self.meeting = m,
                 Msg::Clip(t) => {
+                    if !self.cfg.clip_on {
+                        continue;
+                    }
                     self.clips.retain(|c| *c != t);
                     self.clips.insert(0, t);
                     self.clips.truncate(20);
@@ -773,9 +808,7 @@ impl App {
                     combo.push_str(&name);
                     if (modifiers.ctrl || modifiers.shift || modifiers.alt) && sys::parse_combo(&combo).is_some() {
                         self.cfg.hotkey = combo.clone();
-                        if let Ok(mut g) = self.hotkey_shared.lock() {
-                            *g = combo;
-                        }
+                        self.sync_hotkey();
                         self.cfg.save();
                         self.capturing_hotkey = false;
                         break;
@@ -913,6 +946,38 @@ impl App {
             }
             Action::CalNav(d) => self.cal_off += d,
             Action::CalSel(y) => self.cal_sel = y,
+            Action::OpenSettings => self.settings_open = true,
+            Action::SetCat(c) => {
+                self.set_cat = c;
+                self.set_scroll_px = 0.0;
+            }
+            Action::SetF(id, v) => {
+                if id == SetId::LyricOff {
+                    let ms = ((v - 0.5) * 10_000.0 / 100.0).round() as i32 * 100;
+                    self.cfg.lyric_offset_ms = ms.clamp(-5000, 5000);
+                    self.cfg.save();
+                }
+            }
+            Action::IgnoreAdd => {
+                let k = self.ignore_input.trim().to_lowercase();
+                if !k.is_empty() && !self.cfg.ignore_titles.contains(&k) {
+                    self.cfg.ignore_titles.push(k);
+                    self.cfg.save();
+                    self.sync_ignore();
+                }
+                self.ignore_input.clear();
+            }
+            Action::IgnoreDel(i) => {
+                if i < self.cfg.ignore_titles.len() {
+                    self.cfg.ignore_titles.remove(i);
+                    self.cfg.save();
+                    self.sync_ignore();
+                }
+            }
+            Action::TestAdzan => sys::play_adzan(),
+            Action::OpenDataDir => sys::open_uri(&store::dir().display().to_string()),
+            Action::OpenShots => sys::open_uri(&user_dir(r"Pictures\Screenshots")),
+            Action::OpenCaps => sys::open_uri(&user_dir(r"Videos\Captures")),
             Action::CapFull => sys::screenshot_full(),
             Action::CapWindow => sys::screenshot_window(),
             Action::ShelfRemove(i) => {
@@ -1014,6 +1079,44 @@ impl App {
                 self.cfg.water_min = step(self.cfg.water_min, d, 15, 15, 240);
                 self.next_water_at = now + Duration::from_secs(self.cfg.water_min as u64 * 60);
             }
+            SetId::Weather => {
+                self.cfg.weather_on = !self.cfg.weather_on;
+                if self.cfg.weather_on {
+                    self.weather_retry_at = now;
+                } else {
+                    self.weather = None;
+                }
+            }
+            SetId::Clip => {
+                self.cfg.clip_on = !self.cfg.clip_on;
+                if !self.cfg.clip_on {
+                    self.clips.clear();
+                }
+            }
+            SetId::Robot => self.cfg.robot_on = !self.cfg.robot_on,
+            SetId::LyricOff => {}
+            SetId::HotkeyOn => {
+                self.cfg.hotkey_on = !self.cfg.hotkey_on;
+                self.sync_hotkey();
+            }
+            SetId::HotkeyReset => {
+                self.cfg.hotkey = "Ctrl+Shift+S".into();
+                self.cfg.hotkey_on = true;
+                self.sync_hotkey();
+            }
+            SetId::ThemeDark => self.cfg.dark = true,
+            SetId::ThemeLight => self.cfg.dark = false,
+            SetId::CityStep => {
+                let list = prayer::cities(&self.cfg.region);
+                let cur = list.iter().position(|c| *c == self.cfg.city).unwrap_or(0) as i32;
+                let n = list.len() as i32;
+                let next = (cur + d).rem_euclid(n) as usize;
+                self.cfg.city = list[next].to_string();
+                self.prayer_times = None;
+                self.weather = None;
+                self.prayer_retry_at = now;
+                self.weather_retry_at = now;
+            }
             SetId::WaterGoal => self.cfg.water_goal = step(self.cfg.water_goal, d, 250, 500, 5000),
             SetId::WaterStart => {
                 self.cfg.water_start = step(self.cfg.water_start, d, 1, 0, self.cfg.water_end.saturating_sub(1));
@@ -1023,6 +1126,18 @@ impl App {
             }
         }
         self.cfg.save();
+    }
+
+    fn sync_ignore(&mut self) {
+        if let Ok(mut g) = self.ignore_shared.lock() {
+            *g = self.cfg.ignore_titles.clone();
+        }
+    }
+
+    pub fn sync_hotkey(&mut self) {
+        if let Ok(mut g) = self.hotkey_shared.lock() {
+            *g = if self.cfg.hotkey_on { self.cfg.hotkey.clone() } else { String::new() };
+        }
     }
 
     fn refresh_idle_pomo(&mut self) {
@@ -1102,6 +1217,13 @@ impl eframe::App for App {
             self.apply(ctx, a, now);
         }
 
+        if self.settings_open {
+            let sacts = self.show_settings(ctx);
+            for a in sacts {
+                self.apply(ctx, a, now);
+            }
+        }
+
         // 5) jadwalkan frame berikutnya
         let ms = if self.tween.running(now) {
             16
@@ -1113,6 +1235,13 @@ impl eframe::App for App {
             50 // kursor dipantau manual, jadi tidak boleh terlalu jarang
         };
         ctx.request_repaint_after(Duration::from_millis(ms));
+    }
+}
+
+fn user_dir(sub: &str) -> String {
+    match std::env::var_os("USERPROFILE") {
+        Some(p) => PathBuf::from(p).join(sub).display().to_string(),
+        None => sub.to_string(),
     }
 }
 
